@@ -1,18 +1,40 @@
 import cv2
+import psycopg2
 import os
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente do arquivo .env
+load_dotenv()
 
 class SimpleFaceRecognition:
-    def __init__(self, storage_dir='user_images'):
-        self.storage_dir = storage_dir
+    def __init__(self):
+        # Buscar a URL do banco de dados a partir do arquivo .env
+        self.db_url = os.getenv("DATABASE_URL")
+        if not self.db_url:
+            raise ValueError("A variável DATABASE_URL não foi definida no arquivo .env.")
+
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        
-        if not os.path.exists(self.storage_dir):
-            os.makedirs(self.storage_dir)
+        self.conn = psycopg2.connect(self.db_url)
+        self.create_table()
+
+    def create_table(self):
+        """Cria a tabela no banco de dados, se não existir."""
+        with self.conn.cursor() as cursor:
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                nome VARCHAR(100) NOT NULL,
+                cpf VARCHAR(14) UNIQUE NOT NULL,
+                telefone VARCHAR(15),
+                imagem BYTEA
+            );
+            """)
+            self.conn.commit()
 
     def capture_image(self):
         """Captura imagem da webcam"""
         cap = cv2.VideoCapture(0)
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -21,22 +43,15 @@ class SimpleFaceRecognition:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
-            
-            # Desenha retângulos nos rostos detectados
+
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-            
-            # Adiciona instruções na tela
-            cv2.putText(frame, 
-                        "Pressione 'C' para capturar, 'Q' para sair", 
-                        (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 
-                        0.7, 
-                        (0, 255, 0), 
-                        2)
-            
+
+            cv2.putText(frame, "Pressione 'C' para capturar, 'Q' para sair", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
             cv2.imshow('Capturar Imagem', frame)
-            
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord('c'):
                 cap.release()
@@ -48,42 +63,46 @@ class SimpleFaceRecognition:
                 return None
 
     def save_user_image(self, image, name, cpf, telefone):
-        """Salva imagem do usuário"""
+        """Salva imagem do usuário no banco de dados."""
         if image is None:
             print("Imagem inválida.")
             return
 
-        filename = f"{name}_{cpf}.jpg"
-        filepath = os.path.join(self.storage_dir, filename)
-        
-        cv2.imwrite(filepath, image)
-        
-        # Salvar metadados
-        metadata_filepath = os.path.join(self.storage_dir, f"{name}_{cpf}_info.txt")
-        with open(metadata_filepath, 'w') as f:
-            f.write(f"Nome: {name}\n")
-            f.write(f"CPF: {cpf}\n")
-            f.write(f"Telefone: {telefone}\n")
+        # Codificar a imagem como bytes
+        _, buffer = cv2.imencode('.jpg', image)
+        image_bytes = buffer.tobytes()
+
+        # Inserir no banco de dados
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("""
+                INSERT INTO usuarios (nome, cpf, telefone, imagem)
+                VALUES (%s, %s, %s, %s)
+                """, (name, cpf, telefone, image_bytes))
+                self.conn.commit()
+                print("Usuário cadastrado com sucesso!")
+            except psycopg2.Error as e:
+                print(f"Erro ao salvar no banco de dados: {e}")
 
     def detect_face(self, image):
-        """Detecta rosto na imagem"""
+        """Detecta rosto na imagem."""
         if image is None:
             return False
-        
+
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
         return len(faces) > 0
 
     def run(self):
-        """Executa o fluxo principal da aplicação"""
+        """Executa o fluxo principal da aplicação."""
         while True:
             print("\nOpções:")
             print("1 - Cadastrar usuário")
             print("2 - Verificar entrada")
             print("3 - Sair")
-            
+
             choice = input("Escolha: ")
-            
+
             if choice == '1':
                 print("Posicione seu rosto e pressione 'C' para capturar")
                 image = self.capture_image()
@@ -92,10 +111,9 @@ class SimpleFaceRecognition:
                     cpf = input("CPF: ")
                     telefone = input("Telefone: ")
                     self.save_user_image(image, name, cpf, telefone)
-                    print("Usuário cadastrado!")
                 else:
                     print("Nenhum rosto detectado ou captura cancelada.")
-            
+
             elif choice == '2':
                 print("Posicione seu rosto e pressione 'C' para verificar")
                 image = self.capture_image()
@@ -103,7 +121,7 @@ class SimpleFaceRecognition:
                     print("Acesso liberado!")
                 else:
                     print("Acesso negado. Rosto não detectado.")
-            
+
             elif choice == '3':
                 break
 
