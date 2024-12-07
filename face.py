@@ -1,6 +1,7 @@
 import cv2
 import psycopg2
 import os
+import bcrypt
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente do arquivo .env
@@ -24,7 +25,7 @@ class SimpleFaceRecognition:
             CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,
                 nome VARCHAR(100) NOT NULL,
-                cpf VARCHAR(14) UNIQUE NOT NULL,
+                cpf_hash VARCHAR(60) UNIQUE NOT NULL,
                 telefone VARCHAR(15),
                 imagem BYTEA
             );
@@ -62,6 +63,17 @@ class SimpleFaceRecognition:
                 cv2.destroyAllWindows()
                 return None
 
+    def hash_cpf(self, cpf):
+        """Gera um hash seguro para o CPF."""
+        # Converte o CPF para bytes e gera um salt
+        cpf_bytes = cpf.encode('utf-8')
+        # Usa bcrypt para gerar um hash
+        return bcrypt.hashpw(cpf_bytes, bcrypt.gensalt()).decode('utf-8')
+
+    def verify_cpf(self, cpf, stored_hash):
+        """Verifica se o CPF corresponde ao hash armazenado."""
+        return bcrypt.checkpw(cpf.encode('utf-8'), stored_hash.encode('utf-8'))
+
     def save_user_image(self, image, name, cpf, telefone):
         """Salva imagem do usuário no banco de dados."""
         if image is None:
@@ -72,13 +84,16 @@ class SimpleFaceRecognition:
         _, buffer = cv2.imencode('.jpg', image)
         image_bytes = buffer.tobytes()
 
+        # Gerar hash do CPF
+        cpf_hash = self.hash_cpf(cpf)
+
         # Inserir no banco de dados
         with self.conn.cursor() as cursor:
             try:
                 cursor.execute("""
-                INSERT INTO usuarios (nome, cpf, telefone, imagem)
+                INSERT INTO usuarios (nome, cpf_hash, telefone, imagem)
                 VALUES (%s, %s, %s, %s)
-                """, (name, cpf, telefone, image_bytes))
+                """, (name, cpf_hash, telefone, image_bytes))
                 self.conn.commit()
                 print("Usuário cadastrado com sucesso!")
             except psycopg2.Error as e:

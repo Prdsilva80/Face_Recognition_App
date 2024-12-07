@@ -2,3 +2,4 @@ opencv-python
 mediapipe
 python-dotenv
 psycopg2
+bcrypt
