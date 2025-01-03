@@ -3,13 +3,16 @@ import psycopg2
 import os
 import bcrypt
 from dotenv import load_dotenv
+import tkinter as tk
+from tkinter import messagebox
+from tkinter import simpledialog
 
-# Carregar variáveis de ambiente do arquivo .env
 load_dotenv()
 
-class SimpleFaceRecognition:
+
+class SimpleFaceRecognitionApp:
     def __init__(self):
-        # Buscar a URL do banco de dados a partir do arquivo .env
+        # Configurações iniciais
         self.db_url = os.getenv("DATABASE_URL")
         if not self.db_url:
             raise ValueError("A variável DATABASE_URL não foi definida no arquivo .env.")
@@ -17,6 +20,17 @@ class SimpleFaceRecognition:
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.conn = psycopg2.connect(self.db_url)
         self.create_table()
+
+        # Configuração da interface
+        self.root = tk.Tk()
+        self.root.title("Reconhecimento Facial Simples")
+
+        tk.Label(self.root, text="Reconhecimento Facial", font=("Arial", 16)).pack(pady=10)
+        tk.Button(self.root, text="Cadastrar Usuário", command=self.register_user).pack(pady=5)
+        tk.Button(self.root, text="Verificar Entrada", command=self.verify_user).pack(pady=5)
+        tk.Button(self.root, text="Sair", command=self.root.quit).pack(pady=10)
+
+        self.root.mainloop()
 
     def create_table(self):
         """Cria a tabela no banco de dados, se não existir."""
@@ -39,7 +53,7 @@ class SimpleFaceRecognition:
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("Falha ao capturar imagem.")
+                messagebox.showerror("Erro", "Falha ao capturar imagem.")
                 return None
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -47,9 +61,6 @@ class SimpleFaceRecognition:
 
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-
-            cv2.putText(frame, "Pressione 'C' para capturar, 'Q' para sair", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             cv2.imshow('Capturar Imagem', frame)
 
@@ -65,29 +76,20 @@ class SimpleFaceRecognition:
 
     def hash_cpf(self, cpf):
         """Gera um hash seguro para o CPF."""
-        # Converte o CPF para bytes e gera um salt
         cpf_bytes = cpf.encode('utf-8')
-        # Usa bcrypt para gerar um hash
         return bcrypt.hashpw(cpf_bytes, bcrypt.gensalt()).decode('utf-8')
-
-    def verify_cpf(self, cpf, stored_hash):
-        """Verifica se o CPF corresponde ao hash armazenado."""
-        return bcrypt.checkpw(cpf.encode('utf-8'), stored_hash.encode('utf-8'))
 
     def save_user_image(self, image, name, cpf, telefone):
         """Salva imagem do usuário no banco de dados."""
         if image is None:
-            print("Imagem inválida.")
+            messagebox.showerror("Erro", "Imagem inválida.")
             return
 
-        # Codificar a imagem como bytes
         _, buffer = cv2.imencode('.jpg', image)
         image_bytes = buffer.tobytes()
 
-        # Gerar hash do CPF
         cpf_hash = self.hash_cpf(cpf)
 
-        # Inserir no banco de dados
         with self.conn.cursor() as cursor:
             try:
                 cursor.execute("""
@@ -95,9 +97,9 @@ class SimpleFaceRecognition:
                 VALUES (%s, %s, %s, %s)
                 """, (name, cpf_hash, telefone, image_bytes))
                 self.conn.commit()
-                print("Usuário cadastrado com sucesso!")
+                messagebox.showinfo("Sucesso", "Usuário cadastrado com sucesso!")
             except psycopg2.Error as e:
-                print(f"Erro ao salvar no banco de dados: {e}")
+                messagebox.showerror("Erro", f"Erro ao salvar no banco de dados: {e}")
 
     def detect_face(self, image):
         """Detecta rosto na imagem."""
@@ -108,38 +110,25 @@ class SimpleFaceRecognition:
         faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
         return len(faces) > 0
 
-    def run(self):
-        """Executa o fluxo principal da aplicação."""
-        while True:
-            print("\nOpções:")
-            print("1 - Cadastrar usuário")
-            print("2 - Verificar entrada")
-            print("3 - Sair")
+    def register_user(self):
+        """Fluxo para registrar usuário."""
+        image = self.capture_image()
+        if image is not None and self.detect_face(image):
+            name = simpledialog.askstring("Cadastro", "Digite o nome:")
+            cpf = simpledialog.askstring("Cadastro", "Digite o CPF:")
+            telefone = simpledialog.askstring("Cadastro", "Digite o telefone:")
+            self.save_user_image(image, name, cpf, telefone)
+        else:
+            messagebox.showerror("Erro", "Nenhum rosto detectado ou captura cancelada.")
 
-            choice = input("Escolha: ")
+    def verify_user(self):
+        """Fluxo para verificar usuário."""
+        image = self.capture_image()
+        if image is not None and self.detect_face(image):
+            messagebox.showinfo("Sucesso", "Acesso liberado!")
+        else:
+            messagebox.showerror("Erro", "Rosto não detectado ou acesso negado.")
 
-            if choice == '1':
-                print("Posicione seu rosto e pressione 'C' para capturar")
-                image = self.capture_image()
-                if image is not None and self.detect_face(image):
-                    name = input("Nome: ")
-                    cpf = input("CPF: ")
-                    telefone = input("Telefone: ")
-                    self.save_user_image(image, name, cpf, telefone)
-                else:
-                    print("Nenhum rosto detectado ou captura cancelada.")
-
-            elif choice == '2':
-                print("Posicione seu rosto e pressione 'C' para verificar")
-                image = self.capture_image()
-                if image is not None and self.detect_face(image):
-                    print("Acesso liberado!")
-                else:
-                    print("Acesso negado. Rosto não detectado.")
-
-            elif choice == '3':
-                break
 
 if __name__ == "__main__":
-    app = SimpleFaceRecognition()
-    app.run()
+    SimpleFaceRecognitionApp()
